@@ -58,6 +58,7 @@ _job_stat_recheck = 'RECHECK'
 #------------------------------------------------------------------------
 #--- FUNCTION
 #------------------------------------------------------------------------
+
 def report_status(msg):
     '''
     print a status message with timestamp
@@ -68,6 +69,7 @@ def report_status(msg):
 #------------------------------------------------------------------------
 #--- FUNCTION
 #------------------------------------------------------------------------
+
 def total_elapsed_time():
     '''
     compute total time elapsed since initialization
@@ -78,6 +80,7 @@ def total_elapsed_time():
 #------------------------------------------------------------------------
 #--- FUNCTION
 #------------------------------------------------------------------------
+
 def _wait_on_jobs(job_wait_list=[],njob_target=0):
     '''
     wait on a list of job IDs
@@ -189,6 +192,7 @@ def _wait_on_jobs(job_wait_list=[],njob_target=0):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def _slurm_batch_submit(command,
                         constraint='geyser',
                         partition='dav',
@@ -360,6 +364,7 @@ def _slurm_batch_submit(command,
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def _slurm_scontrol_show_job(jid):
     '''
     return job status parsing scontrol command
@@ -395,6 +400,7 @@ def _slurm_scontrol_show_job(jid):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def _slurm_job_dependencies(jid):
     status_dict = _slurm_scontrol_show_job(jid)
 
@@ -409,6 +415,7 @@ def _slurm_job_dependencies(jid):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def _slurm_job_status(jid):
     '''
     return job status parsing scontrol command
@@ -418,7 +425,9 @@ def _slurm_job_status(jid):
                   'COMPLETED': _job_stat_done,
                   'COMPLETING': _job_stat_recheck,
                   'FAILED': _job_stat_fail,
+                  'TIMEOUT': _job_stat_fail,
                   'CANCELLED': _job_stat_fail,
+                  'OUT_OF_MEMORY':_job_stat_fail,
                   'PENDING': _job_stat_pend}
 
     status_dict = _slurm_scontrol_show_job(jid)
@@ -434,6 +443,7 @@ def _slurm_job_status(jid):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def kill(jid):
     if Q_SYSTEM == 'LSF':
         call(['bkill',jid])
@@ -443,6 +453,7 @@ def kill(jid):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def job_dependencies(jid):
     if Q_SYSTEM == 'LSF':
         return []
@@ -452,6 +463,7 @@ def job_dependencies(jid):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def submit(cmdi,**kwargs):
 
     #-- if number of jobs is at max, wait
@@ -471,6 +483,7 @@ def submit(cmdi,**kwargs):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def wait(job_wait_list=[],njob_target=0,closeout=False):
     ok,stop = _wait_on_jobs(job_wait_list,njob_target)
     if not closeout:
@@ -480,6 +493,7 @@ def wait(job_wait_list=[],njob_target=0,closeout=False):
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
+
 def status(jid):
 
     stat_out = None
@@ -498,6 +512,7 @@ def status(jid):
 #----------------------------------------------------------------
 #---- FUNCTION
 #----------------------------------------------------------------
+
 def stop_program(ok=False,stop=False):
     if not ok:
         if JID:
@@ -514,6 +529,7 @@ def stop_program(ok=False,stop=False):
 #------------------------------------------------------------------------
 #--- main
 #------------------------------------------------------------------------
+
 if __name__ == "__main__":
     '''
     call this script with task and arguments to use functions at command line
