@@ -1,17 +1,11 @@
 import os
 import numpy as np
 import xarray as xr
-import json
 import tempfile
 import copy
 
 import task_manager as tm
-
-#------------------------------------------------------------
-#-- function
-#------------------------------------------------------------
-def json_cmd(kwargs_dict):
-    return '\'{0}\''.format(json.dumps(kwargs_dict))
+from argpass import picklepass
 
 #------------------------------------------------------------
 #-- function
@@ -133,13 +127,12 @@ def apply(script,
             return file_out_i
 
         #-- update input arguments
-        kwargs.update({'isel': {'time':tnx},
+        kwargs.update({'isel': {'time':slice(tnx[0],tnx[1])},
                        'file_out': file_out_i})
 
         #-- submit
-        print(json_cmd(kwargs))
-        jid = tm.submit([script,json_cmd(kwargs)],**submit_kwargs_i)
-        jid_list.extend(jid)
+        jid = tm.submit([script,picklepass(kwargs)],**submit_kwargs_i)
+        jid_list.append(jid)
 
         return file_out_i
 
