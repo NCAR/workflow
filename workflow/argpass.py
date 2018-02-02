@@ -3,13 +3,20 @@ try:
 except:
     import pickle
 import argparse
+import tempfile
 
 #------------------------------------------------------------
 #-- function
 #------------------------------------------------------------
 
-def picklepass(kwargs):
-    return '"{0}"'.format(pickle.dumps(kwargs))
+def picklepass(kwargs,asfile=False):
+    if asfile:
+        (fid,tmpfile) = tempfile.mkstemp('.picklepass')
+        with open(tmpfile,'w') as fid:
+            pickle.dump(kwargs,fid)
+        return tmpfile
+    else:
+        return '"{0}"'.format(pickle.dumps(kwargs))
 
 #------------------------------------------------------------
 #-- function
