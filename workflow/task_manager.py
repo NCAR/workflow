@@ -502,10 +502,13 @@ def status(jid):
     elif Q_SYSTEM == 'SLURM':
         stat_out = _slurm_job_status(jid)
         i = 0
-        while stat_out == _job_stat_recheck and i < 50:
+        while stat_out == _job_stat_recheck and i < 100:
             stat_out = _slurm_job_status(jid)
             i += 1
-            time.sleep(0.2)
+            time.sleep(0.5)
+
+        if stat_out == _job_stat_recheck:
+            stat_out = _job_stat_fail
 
     return stat_out
 

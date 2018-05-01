@@ -138,8 +138,12 @@ def apply(script,
 
 
     #-- get stopping index
+    file_in_0 = kwargs['file_in']
+    if isinstance(file_in_0,list):
+        file_in_0 = file_in_0[0]
+
     if stop is None:
-        stop = len(xr.open_dataset(kwargs['file_in'],
+        stop = len(xr.open_dataset(file_in_0,
                                    decode_times=False,
                                    decode_coords=False).time)
     time_chunks = gen_time_chunks(start,stop,chunk_size)
