@@ -4,8 +4,8 @@ import xarray as xr
 import tempfile
 import copy
 
-import task_manager as tm
-from argpass import picklepass
+from . import task_manager as tm
+from .argpass import picklepass
 
 #------------------------------------------------------------
 #-- function

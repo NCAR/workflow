@@ -1,3 +1,3 @@
 
-import task_manager
-import chunktime
+from . import task_manager
+from . import chunktime

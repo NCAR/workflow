@@ -4,6 +4,17 @@ except:
     import pickle
 import argparse
 import tempfile
+import os
+from subprocess import call
+
+if 'TMPDIR' in os.environ:
+    tmpdir = os.path.join(os.environ['TMPDIR'], '')
+else:
+    tmpdir = os.path.join('.', '')
+
+if not os.path.exists(tmpdir):
+    call(['mkdir','-p',tmpdir])
+
 
 #------------------------------------------------------------
 #-- function
@@ -11,8 +22,8 @@ import tempfile
 
 def picklepass(kwargs,asfile=False):
     if asfile:
-        (fid,tmpfile) = tempfile.mkstemp('.picklepass')
-        with open(tmpfile,'w') as fid:
+        (fid,tmpfile) = tempfile.mkstemp(suffix='.picklepass',dir=tmpdir)
+        with open(tmpfile,'wb') as fid:
             pickle.dump(kwargs,fid)
         return tmpfile
     else:
@@ -45,11 +56,11 @@ def pickleparse(default={},description='',required_parameters=[]):
                    help='Interpret input as a file name')
 
     args = p.parse_args()
-    print args.kwargs
+    print(args.kwargs)
     if not args.kwargs_as_file:
         control_in = pickle.loads(args.kwargs)
     else:
-        with open(args.kwargs,'r') as fp:
+        with open(args.kwargs,'rb') as fp:
             control_in = pickle.load(fp)
 
     control = default

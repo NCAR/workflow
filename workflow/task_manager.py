@@ -1,4 +1,6 @@
 #! /usr/bin/env python
+from __future__ import print_function
+
 import os
 import stat
 import sys
@@ -22,7 +24,8 @@ MAXJOBS = 400      # max number of jobs to keep in the queue
 ACCOUNT = 'NCGD0011'
 
 #-- default conda environment for analyses
-CONDA_ENV = 'py2'
+CONDA_ENV = 'py3_geyser'
+CONDA_PATH = 'PATH=/glade/work/mclong/miniconda3/bin'
 
 USER_MAIL = os.environ['USER']+'@ucar.edu'
 
@@ -33,20 +36,20 @@ if any(s in hostname for s in ['cheyenne','geyser','caldera','pronghorn']):
     SCRATCH = os.path.join('/glade/scratch',os.environ['USER'])
 else:
     #TODO: implement Q_SYSTEM = None
-    print('hostname not found')
-    sys.exit(1)
+    raise ValueError('hostname not found')
+
 
 #-- where to place log and run file output output
 JOB_FILE_PREFIX = 'task_manager.calc'
 TMPDIR = os.path.join(SCRATCH,'tmp')
 if not os.path.exists(TMPDIR):
     stat = call(['mkdir','-p',TMPDIR])
-    if stat != 0: sys.exit(1)
+    if stat != 0: raise
 
 JOB_LOG_DIR = os.path.join(SCRATCH,'task-manager')
 if not os.path.exists(JOB_LOG_DIR):
     stat = call(['mkdir','-p',JOB_LOG_DIR])
-    if stat != 0: sys.exit(1)
+    if stat != 0: raise
 
 #-- job status codes
 _job_stat_run = 'RUN'
@@ -106,10 +109,11 @@ def _wait_on_jobs(job_wait_list=[],njob_target=0):
     report_status('waiting on %d jobs'%njob_running)
     if njob_target == 0:
         print('-'*50)
-        for jid in job_wait_list: print jid,
-        print
+        for jid in job_wait_list:
+            print(jid,end=' ')
+        print()
         print('-'*50)
-        print
+        print()
 
     #-- wait on jobs
     job_status = {}
@@ -174,13 +178,14 @@ def _wait_on_jobs(job_wait_list=[],njob_target=0):
         stop_now = True
 
     if not ok:
-        print
-        print '-'*50
+        print()
+        print('-'*50)
         report_status('Failed jobs:')
-        for jid in fail_list: print jid,
-        print
-        print '-'*50
-        print
+        for jid in fail_list:
+            print(jid,end=' ')
+        print()
+        print('-'*50)
+        print()
     else:
         report_status('Done waiting.')
 
@@ -193,8 +198,59 @@ def _wait_on_jobs(job_wait_list=[],njob_target=0):
 #---- function
 #----------------------------------------------------------------
 
+def _os_status(jid):
+    return _job_stat_done
+
+#----------------------------------------------------------------
+#---- function
+#----------------------------------------------------------------
+
+def _os_call(command,**kwargs):
+    ok = True
+    stop = False
+    cmd_line = []
+    if isinstance(command[0],list):
+        cmd_line = 'set -e ; '+'; '.join([' '.join(cmd) for cmd in command])
+    else:
+        cmd_line = ' '.join(command)
+
+    env = os.environ.copy()
+
+    p = Popen(cmd_line,
+          stdin=None,
+          stdout=PIPE,
+          stderr=PIPE,
+          env=env,
+          shell=True)
+    stdout, stderr = p.communicate()
+
+    stdout = stdout.decode('UTF-8')
+    stderr = stderr.decode('UTF-8')
+
+    jid = p.pid
+    ok = p.returncode == 0
+
+    if not ok:
+        print('os submit failed!')
+        print('Command:')
+        print(cmd_line)
+        print('\nstdout:')
+        print(stdout)
+        print('\nstderr:')
+        print(stderr)
+        raise
+
+    if total_elapsed_time() > QUEUE_MAX_HOURS:
+        stop = True
+
+    return jid,ok,stop
+
+#----------------------------------------------------------------
+#---- function
+#----------------------------------------------------------------
+
 def _slurm_batch_submit(command,
-                        constraint='geyser',
+                        constraint=None,
                         partition='dav',
                         account='',
                         conda_env='',
@@ -246,11 +302,12 @@ def _slurm_batch_submit(command,
                         '#SBATCH -p '+partition,
                         '#SBATCH -A '+account,
                         '#SBATCH -t '+time_limit,
-                        '#SBATCH --mem '+memory,
-                        '#SBATCH -C '+constraint,
+                        '#SBATCH --mem='+memory,
                         '#SBATCH -e '+stdoe,
                         '#SBATCH -o '+stdoe]
-
+    if constraint is not None:
+        batch_script_pre.append('#SBATCH -C '+constraint)
+        
     if email:
         batch_script_pre.append('#SBATCH --mail-type=ALL')
         batch_script_pre.append('#SBATCH --mail-user='+USER_MAIL)
@@ -262,8 +319,8 @@ def _slurm_batch_submit(command,
                          if _slurm_job_status(jid) is not None]
         if len(depjob) != len(depjob_culled):
             print('Some job dependencies not found:')
-            print depjob
-            print depjob_culled
+            print(depjob)
+            print(depjob_culled)
             depjob = depjob_culled
 
         depjobstr = ':'.join(depjob)
@@ -303,7 +360,7 @@ def _slurm_batch_submit(command,
     # this fixes it:
     batch_script_pre.append('unset LD_LIBRARY_PATH')
 
-    batch_script_pre.append('export PATH=/glade/p/work/mclong/miniconda2/bin:${PATH}')
+    batch_script_pre.append('export {CONDA_PATH}:$PATH'.format(CONDA_PATH=CONDA_PATH))
     batch_script_pre.append('export PYTHONUNBUFFERED=False')
     batch_script_pre.append('export TMPDIR='+TMPDIR)
 
@@ -337,23 +394,29 @@ def _slurm_batch_submit(command,
               env=env)
     stdout, stderr = p.communicate()
 
+    stdout = stdout.decode('UTF-8')
+    stderr = stderr.decode('UTF-8')
+
     #-- parse return string to get job ID
     try:
         jid = stdout.splitlines()[-1].split(' ')[-1].strip()
         JID.append(jid)
     except:
-        print('SLURM sbatch failed:')
+        print('SLURM sbatch failed!')
+        print('Command:')
         print(command)
+        print('\nstdout:')
         print(stdout)
+        print('\nstderr:')
         print(stderr)
-        sys.exit(1)
+        raise
 
     #-- print job id and job submission string
     scmd = '; '.join(cmd_line)
     print('-'*50)
     print('%s (%s): %s'%(jid,os.path.basename(batch_script_file),scmd))
     print('-'*50)
-    print
+    print()
 
     if total_elapsed_time() > QUEUE_MAX_HOURS:
         stop = True
@@ -375,6 +438,9 @@ def _slurm_scontrol_show_job(jid):
               stdin=None, stdout=PIPE, stderr=PIPE)
     stdout, stderr = p.communicate()
 
+    stdout = stdout.decode('UTF-8')
+    stderr = stderr.decode('UTF-8')
+
     #-- jobs disappear, so if the job status cannot be found, return None
     if stderr.strip() == 'slurm_load_jobs error: Invalid job id specified':
         return None
@@ -389,11 +455,11 @@ def _slurm_scontrol_show_job(jid):
                 key,val = item.split('=',1)
                 status_dict[key] = val
         except:
-            print 'SLURM scontrol failed:'
-            print stdout
-            print stderr
-            print status_dict
-            sys.exit(1)
+            print('SLURM scontrol failed:')
+            print(stdout)
+            print(stderr)
+            print(status_dict)
+            raise
 
     return status_dict
 
@@ -437,15 +503,17 @@ def _slurm_job_status(jid):
     elif status_dict['JobState'] in stat_codes:
         return stat_codes[status_dict['JobState']]
     else:
-        print('Unknown job status message: %s'%status_dict['JobState'])
-        sys.exit(1)
+        raise ValueError('Unknown job status message: %s'%status_dict['JobState'])
+
 
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
 
 def kill(jid):
-    if Q_SYSTEM == 'LSF':
+    if Q_SYSTEM is None:
+        call(['kill',jid])
+    elif Q_SYSTEM == 'LSF':
         call(['bkill',jid])
     elif Q_SYSTEM == 'SLURM':
         call(['scancel',jid])
@@ -455,7 +523,9 @@ def kill(jid):
 #----------------------------------------------------------------
 
 def job_dependencies(jid):
-    if Q_SYSTEM == 'LSF':
+    if Q_SYSTEM is None:
+        return []
+    elif Q_SYSTEM == 'LSF':
         return []
     elif Q_SYSTEM == 'SLURM':
         return _slurm_job_dependencies(jid)
@@ -468,11 +538,13 @@ def submit(cmdi,**kwargs):
 
     #-- if number of jobs is at max, wait
     if len(JID) >= MAXJOBS:
-        print 'Job count at threshold.'
+        print('Job count at threshold.')
         ok = wait(JID,njob_target=0)
         stop_program(ok)
 
-    if Q_SYSTEM == 'LSF':
+    if Q_SYSTEM is None:
+        jid,ok,stop = _os_call(cmdi,**kwargs)
+    elif Q_SYSTEM == 'LSF':
         jid,ok,stop = _bsub(cmdi,**kwargs)
     elif Q_SYSTEM == 'SLURM':
         jid,ok,stop = _slurm_batch_submit(cmdi,**kwargs)
@@ -497,7 +569,9 @@ def wait(job_wait_list=[],njob_target=0,closeout=False):
 def status(jid):
 
     stat_out = None
-    if Q_SYSTEM == 'LSF':
+    if Q_SYSTEM is None:
+        stat_out = _os_status(jid)
+    elif Q_SYSTEM == 'LSF':
         stat_out = _bstat(jid)
     elif Q_SYSTEM == 'SLURM':
         stat_out = _slurm_job_status(jid)
@@ -519,9 +593,9 @@ def status(jid):
 def stop_program(ok=False,stop=False):
     if not ok:
         if JID:
-            print 'waiting on remaining jobs'
+            print('waiting on remaining jobs')
             ok = wait(closeout=True)
-        print 'EXIT ERROR'
+        print('EXIT ERROR')
         sys.exit(1)
     elif stop:
         print('QUEUE TIMER EXPIRED')
@@ -555,10 +629,11 @@ if __name__ == "__main__":
         wait(args)
 
     elif task == "peek":
-        #TODO: this works with the slurm submit, but not bsub
+
         job_datetime='????????-??????'
-        random_str = '??????'
+        random_str = '*'
         stdoe = os.path.join(JOB_LOG_DIR,'.'.join([JOB_FILE_PREFIX,job_datetime,random_str,args[0],'out']))
+        print(stdoe)
         jout = glob(stdoe)
         jout.sort()
         if jout:
@@ -569,7 +644,7 @@ if __name__ == "__main__":
                 call(['clear'])
                 exit()
         else:
-            print args[0]+' not found.'
+            print(args[0]+' not found.')
 
     else:
-        print task+' not found.'
+        print(task+' not found.')
