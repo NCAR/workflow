@@ -24,14 +24,14 @@ MAXJOBS = 400      # max number of jobs to keep in the queue
 ACCOUNT = 'NCGD0011'
 
 #-- default conda environment for analyses
-CONDA_ENV = 'py3_geyser'
+CONDA_ENV = 'analysis'
 CONDA_PATH = 'PATH=/glade/work/mclong/miniconda3/bin'
 
 USER_MAIL = os.environ['USER']+'@ucar.edu'
 
 #-- machine dependencies
 hostname = socket.gethostname()
-if any(s in hostname for s in ['cheyenne','geyser','caldera','pronghorn']):
+if any(s in hostname for s in ['cheyenne','casper']):
     Q_SYSTEM = 'SLURM'
     SCRATCH = os.path.join('/glade/scratch',os.environ['USER'])
 else:
@@ -307,7 +307,7 @@ def _slurm_batch_submit(command,
                         '#SBATCH -o '+stdoe]
     if constraint is not None:
         batch_script_pre.append('#SBATCH -C '+constraint)
-        
+
     if email:
         batch_script_pre.append('#SBATCH --mail-type=ALL')
         batch_script_pre.append('#SBATCH --mail-user='+USER_MAIL)

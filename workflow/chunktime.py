@@ -35,7 +35,7 @@ def ncrcat(input,output,kwargs={}):
         for f in input:
             fid.write('%s\n'%f)
 
-    jid = tm.submit(['cat',tmpfile,'|','ncrcat','-o',output],**kwargs)
+    jid = tm.submit(['cat',tmpfile,'|','ncrcat','-o',output], **kwargs)
     return jid
 
 #------------------------------------------------------------
@@ -57,7 +57,7 @@ def gen_time_chunks(start,stop,chunk_size):
     '''
 
     time_level_count = stop - start
-    nchunk =  time_level_count / chunk_size
+    nchunk =  time_level_count // chunk_size
     if time_level_count%chunk_size != 0:
         nchunk += 1
     time_ndx = [(start+i*chunk_size,start+i*chunk_size+chunk_size)
@@ -131,7 +131,7 @@ def apply(script,
                        'file_out': file_out_i})
 
         #-- submit
-        jid = tm.submit([script,picklepass(kwargs)],**submit_kwargs_i)
+        jid = tm.submit([script, '-f', picklepass(kwargs, asfile=True)],**submit_kwargs_i)
         jid_list.append(jid)
 
         return file_out_i
