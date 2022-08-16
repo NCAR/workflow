@@ -34,6 +34,9 @@ hostname = socket.gethostname()
 if any(s in hostname for s in ['cheyenne','casper']):
     Q_SYSTEM = 'SLURM'
     SCRATCH = os.path.join('/glade/scratch',os.environ['USER'])
+elif "crhtc" in hostname:
+    Q_SYSTEM='PBS'
+    SCRATCH = os.path.join('/glade/scratch',os.environ['USER'])
 else:
     #TODO: implement Q_SYSTEM = None
     raise ValueError('hostname not found')
@@ -43,8 +46,8 @@ else:
 JOB_FILE_PREFIX = 'task_manager.calc'
 TMPDIR = os.path.join(SCRATCH,'tmp')
 if not os.path.exists(TMPDIR):
-    stat = call(['mkdir','-p',TMPDIR])
-    if stat != 0: raise
+    stat2 = call(['mkdir','-p',TMPDIR])
+    if stat2 != 0: raise
 
 JOB_LOG_DIR = os.path.join(SCRATCH,'task-manager')
 if not os.path.exists(JOB_LOG_DIR):
@@ -424,6 +427,357 @@ def _slurm_batch_submit(command,
     #-- return job id
     return jid,ok,stop
 
+
+def _qsub(command,
+          constraint=None,
+          partition='casper',
+          account='',
+          conda_env='',
+          modules = [],
+          module_purge = False,
+          time_limit = '24:00:00',
+          memory = '100GB',
+          email = False,
+          depjob = None,
+          job_name=''):
+
+    #-- init return args
+    ok = True
+    stop = False
+
+    if not conda_env and CONDA_ENV:
+        conda_env = CONDA_ENV
+
+    if not account:
+        account = ACCOUNT
+
+    #-- determine the job name if not provided
+    cmd_line = []
+    if isinstance(command[0],list):
+        cmd_line = [' '.join(cmd) for cmd in command]
+    else:
+        cmd_line = [' '.join(command)]
+
+    if not job_name:
+        job_name = cmd_line[0].split(' ')[0]
+
+    #-- set up batch script
+    job_datetime = datetime.now().strftime('%Y%m%d-%H%M%S')
+
+    #-- get environment...include in batch?
+    env = os.environ.copy()
+
+    fid,batch_script_file = tempfile.mkstemp(dir=JOB_LOG_DIR,
+                                             prefix=JOB_FILE_PREFIX+'.'+job_datetime+'.',
+                                             suffix='.run')
+    stdoe = batch_script_file.replace('.run','.%J.out')
+
+    #-- construct batch file
+    #---- slurm directives
+    batch_script_pre = ['#!/bin/bash',
+                        '#PBS -N '+job_name.split(' ')[0],
+                        '#PBS -l select=1:ncpus=1:mem='+memory,
+                        '#PBS -q '+partition,
+                        '#PBS -A '+account,
+                        '#PBS -l walltime='+time_limit]
+                        #'#SBATCH -e '+stdoe,
+                        #'#SBATCH -o '+stdoe]
+    #if constraint is not None:
+    #    batch_script_pre.append('#SBATCH -C '+constraint)
+
+    if email:
+        batch_script_pre.append('#PBS -m bea')
+        #batch_script_pre.append('#PBS --mail-user='+USER_MAIL)
+
+    depjobstr = ''
+    if isinstance(depjob,list):
+        #-- cull list if status is None
+        depjob_culled = [jid for jid in depjob
+                         if _slurm_job_status(jid) is not None]
+        if len(depjob) != len(depjob_culled):
+            print('Some job dependencies not found:')
+            print(depjob)
+            print(depjob_culled)
+            depjob = depjob_culled
+
+        depjobstr = ':'.join(depjob)
+
+    elif isinstance(depjob,str):
+        if _slurm_job_status(depjob) is not None:
+            depjobstr = depjob
+
+    if depjobstr:
+        batch_script_pre.append('#SBATCH -d afterok:'+depjobstr)
+    #---- end slurm directives
+
+    batch_script_pre.extend([
+        'if [ -z $MODULEPATH_ROOT ]; then',
+        '  unset MODULEPATH_ROOT',
+        'else',
+        '  echo "NO MODULEPATH_ROOT TO RESET"',
+        'fi',
+        'if [ -z $MODULEPATH ]; then',
+        '  unset MODULEPATH',
+        'else',
+        '  echo "NO MODULEPATH TO RESET"',
+        'fi',
+        'if [ -z $LMOD_SYSTEM_DEFAULT_MODULES ]; then',
+        '  unset LMOD_SYSTEM_DEFAULT_MODULES',
+        'else',
+        '  echo "NO LMOD_SYSTEM_DEFAULT_MODULES TO RESET"',
+        'fi',
+        'source /etc/profile',
+        'export TERM='+env['TERM'],
+        'export HOME='+env['HOME']])
+
+    #-- I get the following error in Python reading netcdf4 files:
+    # ImportError: /lib64/libk5crypto.so.3: symbol krb5int_buf_len, version
+    #   krb5support_0_MIT not defined in file libkrb5support.so.0 with link time
+    #   reference
+    # this fixes it:
+    batch_script_pre.append('unset LD_LIBRARY_PATH')
+
+    batch_script_pre.append('export {CONDA_PATH}:$PATH'.format(CONDA_PATH=CONDA_PATH))
+    batch_script_pre.append('export PYTHONUNBUFFERED=False')
+    batch_script_pre.append('export TMPDIR='+TMPDIR)
+
+    if module_purge:
+        batch_script_pre.append('module purge')
+
+    if modules:
+        for module in modules:
+            batch_script_pre.append('module load '+module)
+        batch_script_pre.append('module list')
+
+    if conda_env:
+        batch_script_pre.append('source activate %s'%conda_env)
+
+    batch_script_post = ['exit ${?}']
+
+    #-- write run script
+    with open(batch_script_file,'w') as fid:
+        for line in batch_script_pre+cmd_line+batch_script_post:
+            fid.write('%s\n'%line)
+
+    #-- make run script executable
+    st = os.stat(batch_script_file)
+    os.chmod(batch_script_file, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH )
+
+    #-- submit the job
+    p = Popen(['qsub',batch_script_file],
+              stdin=None,
+              stdout=PIPE,
+              stderr=PIPE,
+              env=env)
+    stdout, stderr = p.communicate()
+
+    stdout = stdout.decode('UTF-8')
+    stderr = stderr.decode('UTF-8')
+
+    #-- parse return string to get job ID
+    try:
+        # Trying to figure out jobid
+        print(stdout)
+        jid = stdout.splitlines()[-1].split(' ')[-1].strip()
+        JID.append(jid)
+    except:
+        print('SLURM sbatch failed!')
+        print('Command:')
+        print(command)
+        print('\nstdout:')
+        print(stdout)
+        print('\nstderr:')
+        print(stderr)
+        raise
+
+    #-- print job id and job submission string
+    scmd = '; '.join(cmd_line)
+    print('-'*50)
+    print('%s (%s): %s'%(jid,os.path.basename(batch_script_file),scmd))
+    print('-'*50)
+    print()
+
+    if total_elapsed_time() > QUEUE_MAX_HOURS:
+        stop = True
+
+    #-- return job id
+    return jid,ok,stop
+
+def _slurm_batch_submit(command,
+                        constraint=None,
+                        partition='dav',
+                        account='',
+                        conda_env='',
+                        modules = [],
+                        module_purge = False,
+                        time_limit = '24:00:00',
+                        memory = '100GB',
+                        email = False,
+                        depjob = None,
+                        job_name=''):
+
+    #-- init return args
+    ok = True
+    stop = False
+
+    if not conda_env and CONDA_ENV:
+        conda_env = CONDA_ENV
+
+    if not account:
+        account = ACCOUNT
+
+    #-- determine the job name if not provided
+    cmd_line = []
+    if isinstance(command[0],list):
+        cmd_line = [' '.join(cmd) for cmd in command]
+    else:
+        cmd_line = [' '.join(command)]
+
+    if not job_name:
+        job_name = cmd_line[0].split(' ')[0]
+
+    #-- set up batch script
+    job_datetime = datetime.now().strftime('%Y%m%d-%H%M%S')
+
+    #-- get environment...include in batch?
+    env = os.environ.copy()
+
+    fid,batch_script_file = tempfile.mkstemp(dir=JOB_LOG_DIR,
+                                             prefix=JOB_FILE_PREFIX+'.'+job_datetime+'.',
+                                             suffix='.run')
+    stdoe = batch_script_file.replace('.run','.%J.out')
+
+    #-- construct batch file
+    #---- slurm directives
+    batch_script_pre = ['#!/bin/bash',
+                        '#SBATCH -J '+job_name.split(' ')[0],
+                        '#SBATCH -n 1',
+                        '#SBATCH --ntasks-per-node=1',
+                        '#SBATCH -p '+partition,
+                        '#SBATCH -A '+account,
+                        '#SBATCH -t '+time_limit,
+                        '#SBATCH --mem='+memory,
+                        '#SBATCH -e '+stdoe,
+                        '#SBATCH -o '+stdoe]
+    if constraint is not None:
+        batch_script_pre.append('#SBATCH -C '+constraint)
+
+    if email:
+        batch_script_pre.append('#SBATCH --mail-type=ALL')
+        batch_script_pre.append('#SBATCH --mail-user='+USER_MAIL)
+
+    depjobstr = ''
+    if isinstance(depjob,list):
+        #-- cull list if status is None
+        depjob_culled = [jid for jid in depjob
+                         if _slurm_job_status(jid) is not None]
+        if len(depjob) != len(depjob_culled):
+            print('Some job dependencies not found:')
+            print(depjob)
+            print(depjob_culled)
+            depjob = depjob_culled
+
+        depjobstr = ':'.join(depjob)
+
+    elif isinstance(depjob,str):
+        if _slurm_job_status(depjob) is not None:
+            depjobstr = depjob
+
+    if depjobstr:
+        batch_script_pre.append('#SBATCH -d afterok:'+depjobstr)
+    #---- end slurm directives
+
+    batch_script_pre.extend([
+        'if [ -z $MODULEPATH_ROOT ]; then',
+        '  unset MODULEPATH_ROOT',
+        'else',
+        '  echo "NO MODULEPATH_ROOT TO RESET"',
+        'fi',
+        'if [ -z $MODULEPATH ]; then',
+        '  unset MODULEPATH',
+        'else',
+        '  echo "NO MODULEPATH TO RESET"',
+        'fi',
+        'if [ -z $LMOD_SYSTEM_DEFAULT_MODULES ]; then',
+        '  unset LMOD_SYSTEM_DEFAULT_MODULES',
+        'else',
+        '  echo "NO LMOD_SYSTEM_DEFAULT_MODULES TO RESET"',
+        'fi',
+        'source /etc/profile',
+        'export TERM='+env['TERM'],
+        'export HOME='+env['HOME']])
+
+    #-- I get the following error in Python reading netcdf4 files:
+    # ImportError: /lib64/libk5crypto.so.3: symbol krb5int_buf_len, version
+    #   krb5support_0_MIT not defined in file libkrb5support.so.0 with link time
+    #   reference
+    # this fixes it:
+    batch_script_pre.append('unset LD_LIBRARY_PATH')
+
+    batch_script_pre.append('export {CONDA_PATH}:$PATH'.format(CONDA_PATH=CONDA_PATH))
+    batch_script_pre.append('export PYTHONUNBUFFERED=False')
+    batch_script_pre.append('export TMPDIR='+TMPDIR)
+
+    if module_purge:
+        batch_script_pre.append('module purge')
+
+    if modules:
+        for module in modules:
+            batch_script_pre.append('module load '+module)
+        batch_script_pre.append('module list')
+
+    if conda_env:
+        batch_script_pre.append('source activate %s'%conda_env)
+
+    batch_script_post = ['exit ${?}']
+
+    #-- write run script
+    with open(batch_script_file,'w') as fid:
+        for line in batch_script_pre+cmd_line+batch_script_post:
+            fid.write('%s\n'%line)
+
+    #-- make run script executable
+    st = os.stat(batch_script_file)
+    os.chmod(batch_script_file, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH )
+
+    #-- submit the job
+    p = Popen(['sbatch',batch_script_file],
+              stdin=None,
+              stdout=PIPE,
+              stderr=PIPE,
+              env=env)
+    stdout, stderr = p.communicate()
+
+    stdout = stdout.decode('UTF-8')
+    stderr = stderr.decode('UTF-8')
+
+    #-- parse return string to get job ID
+    try:
+        jid = stdout.splitlines()[-1].split(' ')[-1].strip()
+        JID.append(jid)
+    except:
+        print('SLURM sbatch failed!')
+        print('Command:')
+        print(command)
+        print('\nstdout:')
+        print(stdout)
+        print('\nstderr:')
+        print(stderr)
+        raise
+
+    #-- print job id and job submission string
+    scmd = '; '.join(cmd_line)
+    print('-'*50)
+    print('%s (%s): %s'%(jid,os.path.basename(batch_script_file),scmd))
+    print('-'*50)
+    print()
+
+    if total_elapsed_time() > QUEUE_MAX_HOURS:
+        stop = True
+
+    #-- return job id
+    return jid,ok,stop
+
 #----------------------------------------------------------------
 #---- function
 #----------------------------------------------------------------
@@ -456,6 +810,51 @@ def _slurm_scontrol_show_job(jid):
                 status_dict[key] = val
         except:
             print('SLURM scontrol failed:')
+            print(stdout)
+            print(stderr)
+            print(status_dict)
+            raise
+
+    return status_dict
+
+##### TODO - get this to parse correctly
+def _pbs_show_job(jid):
+    '''
+    return job status parsing scontrol command
+    '''
+    err = False
+
+    p = Popen(['qstat','-xf',jid],
+              stdin=None, stdout=PIPE, stderr=PIPE)
+    stdout, stderr = p.communicate()
+
+    stdout = stdout.decode('UTF-8')
+    stderr = stderr.decode('UTF-8')
+
+    #-- jobs disappear, so if the job status cannot be found, return None
+    if stderr.startswith('qstat: Unknown Job Id'):
+        return None
+    
+    # TODO - haven't addressed this yet...
+    #elif stderr.strip() == 'slurm_load_jobs error: Socket timed out on send/recv operation':
+        #status_dict = _pbs_show_job(jid)
+
+    else:
+        try:
+            status_dict = {}
+            # Loops through each part of qstat, assigns to dict
+            for item in filter(None,re.split('\n',stdout)):
+                #print(item)
+                
+                # Try this on as many parts of qstat as possible
+                try:
+                    key,val = item.split('=',1)
+                    status_dict[key.strip()] = val.strip()
+                    
+                except ValueError:
+                    pass
+        except:
+            print('PBS qstat failed:')
             print(stdout)
             print(stderr)
             print(status_dict)
@@ -505,6 +904,33 @@ def _slurm_job_status(jid):
     else:
         raise ValueError('Unknown job status message: %s'%status_dict['JobState'])
 
+### TODO - update for q version
+def _pbs_job_status(jid):
+    '''
+    return job status parsing qstat command
+    '''
+
+    stat_codes = {'R': _job_stat_run, # running
+                  'E': _job_stat_recheck, # finished
+                  'W': _job_stat_pend,
+                  'Q': _job_stat_pend} # Pending
+
+    status_dict = _pbs_show_job(jid)
+
+    if status_dict is None:
+        return None
+    elif status_dict['job_state'] == 'F':
+        if int(status_dict['Exit_status']) == 0:
+            return _job_stat_done
+        else:
+            print(f"{status_dict['Exit_status']}, {type(status_dict['Exit_status'])}")
+            return _job_stat_fail
+    # If job state is finished, return job state, otherwise, key off others
+    elif status_dict['job_state'] in stat_codes:
+        return stat_codes[status_dict['job_state']]
+    else:
+        raise ValueError('Unknown job status message: %s'%status_dict['job_state'])
+
 
 #----------------------------------------------------------------
 #---- function
@@ -517,6 +943,8 @@ def kill(jid):
         call(['bkill',jid])
     elif Q_SYSTEM == 'SLURM':
         call(['scancel',jid])
+    elif Q_SYSTEM == 'PBS':
+        call(['qdel',jid])
 
 #----------------------------------------------------------------
 #---- function
@@ -529,6 +957,9 @@ def job_dependencies(jid):
         return []
     elif Q_SYSTEM == 'SLURM':
         return _slurm_job_dependencies(jid)
+    elif Q_SYSTEM == 'PBS':
+        return []
+
 
 #----------------------------------------------------------------
 #---- function
@@ -548,6 +979,9 @@ def submit(cmdi,**kwargs):
         jid,ok,stop = _bsub(cmdi,**kwargs)
     elif Q_SYSTEM == 'SLURM':
         jid,ok,stop = _slurm_batch_submit(cmdi,**kwargs)
+    elif Q_SYSTEM == 'PBS':
+        jid,ok,stop = _qsub(cmdi,**kwargs)
+
 
     stop_program(ok,stop)
     return jid
@@ -581,6 +1015,17 @@ def status(jid):
             i += 1
             time.sleep(0.5)
 
+        if stat_out == _job_stat_recheck:
+            stat_out = _job_stat_fail
+    elif Q_SYSTEM == 'PBS':
+        stat_out = _pbs_job_status(jid)
+        i = 0
+        
+        while stat_out == _job_stat_recheck and i < 100:
+            stat_out = _pbs_job_status(jid)
+            i += 1
+            time.sleep(0.5)
+            
         if stat_out == _job_stat_recheck:
             stat_out = _job_stat_fail
 
